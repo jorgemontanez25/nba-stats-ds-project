@@ -1,1 +1,11 @@
-
+pandas
+numpy
+matplotlib
+seaborn
+scikit-learn
+ploty
+gradio
+joblib
+shap
+huggingface_hub
+notebook
