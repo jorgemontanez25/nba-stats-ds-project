@@ -1,3 +1,11 @@
+
+# Deployment artifacts
+hf_space/
+
+# Agent artifacts
+.agent/
+.gemini/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
