@@ -1,6 +1,9 @@
 
 # Deployment artifacts
-hf_space/
+# Deployment artifacts
+# hf_space/  <-- Commented out to allow tracking of app code
+hf_space/models/*.pkl
+
 
 # Agent artifacts
 .agent/
