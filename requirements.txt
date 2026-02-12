@@ -3,3 +3,6 @@ pandas
 numpy
 gradio
 joblib
+matplotlib
+seaborn
+
