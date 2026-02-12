@@ -5,4 +5,4 @@ gradio
 joblib
 matplotlib
 seaborn
-kaleido
+kaleido==0.2.1
