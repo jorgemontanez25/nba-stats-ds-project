@@ -1,0 +1,281 @@
+
+--- Cell 0 ---
+# Ensure correct kaleido version for static image export
+!pip install kaleido==0.2.1
+
+--- Cell 2 ---
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import plotly.io as pio
+pio.renderers.default = "png"
+import seaborn as sns
+import plotly.express as px
+import plotly.graph_objects as go
+from plotly.offline import init_notebook_mode, iplot
+from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import KMeans
+from sklearn.decomposition import PCA
+
+# Initialize Plotly
+init_notebook_mode(connected=True)
+
+pd.set_option('display.max_columns', None)
+sns.set_theme(style="whitegrid", context="notebook")
+
+# Paths
+DATA_DIR = "../../data/raw/"
+ADVANCED_STATS_PATH = f"{DATA_DIR}Advanced.csv"
+BASIC_STATS_PATH = f"{DATA_DIR}nba_stats.csv"
+# Persistence Paths
+PROJ_ROOT = "../../"
+FIGURES_DIR = f"{PROJ_ROOT}figures/"
+PROCESSED_DATA_PATH = f"{PROJ_ROOT}data/processed/02_analysis_data.csv"
+PROCESSED_DIR = f"{PROJ_ROOT}data/processed/"
+
+import os
+os.makedirs(FIGURES_DIR, exist_ok=True)
+os.makedirs(os.path.dirname(PROCESSED_DATA_PATH), exist_ok=True)
+
+--- Cell 4 ---
+# Load and Merge (Persistence Implemented)
+if os.path.exists(PROCESSED_DATA_PATH):
+    print(f"Loading processed data from {PROCESSED_DATA_PATH}...")
+df_clustering = pd.read_csv(PROCESSED_DATA_PATH)
+df_analysis = df_clustering.copy() # Keeping logical flow
+print(f"Loaded {len(df_clustering)} rows.")
+else:
+    print("Processing raw data...")
+    df_adv = pd.read_csv(ADVANCED_STATS_PATH)
+    df_basic = pd.read_csv(BASIC_STATS_PATH)
+
+    # Filter Modern Era
+    df_adv = df_adv[df_adv['season'] >= 1980].copy()
+    df_basic = df_basic[df_basic['season'] >= 1980].copy()
+
+    # Merge to get a full feature set
+    # UPDATED: Added drb_percent, orb_percent
+    cols_adv = ['player_id', 'season', 'team', 
+                'ts_percent', 'per', 'usg_percent', 'ws', 'bpm', 'vorp', 
+                'ast_percent', 'trb_percent', 'stl_percent', 'blk_percent', 
+                'x3p_ar', 'f_tr', 'drb_percent', 'orb_percent']
+
+    cols_adv = [c for c in cols_adv if c in df_adv.columns]
+    master_df = pd.merge(df_basic, df_adv[cols_adv], on=['player_id', 'season', 'team'], how='inner')
+
+    # Filter for 'TOT' or unique teams to avoid duplicates
+    tot_players = master_df[master_df['team'] == 'TOT'][['player_id', 'season']]
+    master_df = master_df.merge(tot_players, on=['player_id', 'season'], how='left', indicator='is_traded')
+    df_analysis = master_df[(master_df['team'] == 'TOT') | (master_df['is_traded'] == 'left_only')].copy()
+    df_analysis.drop(columns=['is_traded'], inplace=True)
+
+    print(f"Analysis Dataset Size: {len(df_analysis)} players")
+
+    # --- FEATURE ENGINEERING ---
+    season_avgs = df_analysis.groupby('season')[['ts_percent', 'x3p_ar', 'f_tr', 'usg_percent']].transform('mean')
+    df_analysis['rel_ts'] = (df_analysis['ts_percent'] - season_avgs['ts_percent']) * 100
+    df_analysis['rel_x3par'] = (df_analysis['x3p_ar'] - season_avgs['x3p_ar']) * 100
+
+    # Filter for substantial minutes
+df_clustering = df_analysis[df_analysis['mp'] > 1000].copy()
+print(f"Clustering Dataset Size (Min 1000 MP): {len(df_clustering)}")
+
+    # Save processed data
+    print(f"Saving processed data to {PROCESSED_DATA_PATH}...")
+df_clustering.to_csv(PROCESSED_DATA_PATH, index=False)
+
+--- Cell 6 ---
+# 1. Select Features
+features = ['usg_percent', 'ast_percent', 'trb_percent', 'x3p_ar', 'blk_percent', 'stl_percent', 'f_tr', 'rel_ts']
+
+# Fill NaNs (if any)
+X = df_clustering[features].fillna(0)
+
+# 2. Scale Data (Critical for K-Means)
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X)
+
+# 3. Apply K-Means
+# We'll arbitrarily choose K=5 for now (Classic roles: Guard, Wing, Big + variations)
+km = KMeans(n_clusters=6, random_state=42, n_init=10)
+labels = km.fit_predict(X_scaled)
+
+df_clustering['cluster'] = labels
+
+# 4. Analyze Clusters
+cluster_centers = pd.DataFrame(scaler.inverse_transform(km.cluster_centers_), columns=features)
+cluster_centers['cluster'] = range(6)
+cluster_centers['count'] = df_clustering['cluster'].value_counts().sort_index()
+
+print("Cluster Centers (Average Stats per Archetype):")
+display(cluster_centers.round(2))
+# Save Cluster Centers
+cluster_centers.to_csv(f"{PROCESSED_DIR}cluster_centers.csv", index=False)
+print(f"Saved cluster centers to {PROCESSED_DIR}cluster_centers.csv")
+
+--- Cell 8 ---
+# 5. Visualize with PCA (2D Projection)
+pca = PCA(n_components=2)
+components = pca.fit_transform(X_scaled)
+df_clustering['pca_1'] = components[:, 0]
+df_clustering['pca_2'] = components[:, 1]
+
+    df_clustering, 
+    x="pca_1", 
+    y="pca_2", 
+    color=df_clustering['cluster'].astype(str),
+    hover_name="player",
+    hover_data=['season', 'team'] + features,
+    title="NBA Player Archetypes (PCA Projection of Advanced Stats)",
+    labels={"color": "Archetype Cluster"},
+    template="plotly_white",
+    height=700
+)
+# Save Figure
+try:
+    print(f"Saved plot to {FIGURES_DIR}player_archetypes_clusters.html")
+except Exception as e:
+    print(f"Error saving figure: {e}")
+# --- Player Archetypes Plot (Seaborn) ---
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+plt.figure(figsize=(14, 10))
+# Assuming 'Cluster' column exists from previous cells
+sns.scatterplot(
+    data=df_analysis, 
+    x='pca_1', 
+    y='pca_2', 
+    hue='Cluster', 
+    palette='tab10',  
+    alpha=0.6, 
+    s=15
+)
+plt.title('Player Archetypes (PCA)')
+plt.xlabel('PCA Component 1')
+plt.ylabel('PCA Component 2')
+plt.legend(title='Cluster', bbox_to_anchor=(1.05, 1), loc='upper left')
+plt.grid(True, alpha=0.3)
+plt.tight_layout()
+plt.savefig('../figures/player_archetypes_clusters.png', dpi=300)
+plt.show()
+
+--- Cell 11 ---
+# Aggregate stats by Team & Season
+team_agg = df_analysis.groupby(['season', 'team']).agg({
+    'ws': 'sum',
+    'vorp': 'sum',
+    'x3p_ar': 'mean', # Average tendency of roster
+    'ts_percent': 'mean', # Average efficiency
+    'ast_percent': 'mean',
+    'drb_percent': 'mean',
+    'age': 'mean'
+}).reset_index()
+
+# Correlation with Total Win Shares
+team_corr = team_agg.corr(numeric_only=True)['ws'].sort_values(ascending=False)
+print("Correlation with Team Total Win Shares:")
+print(team_corr)
+
+    team_agg, 
+    x="ts_percent", 
+    y="ws", 
+    color="season",
+    hover_data=['team'],
+    title="Team Efficiency (Avg TS%) vs Success (Total Win Shares)",
+    template="plotly_white"
+)
+# Save Figure
+try:
+    print(f"Saved plot to {FIGURES_DIR}team_win_shares.html")
+except Exception as e:
+    print(f"Error saving figure: {e}")
+
+# Save Team Aggregation Data
+try:
+    team_agg.to_csv(f"{PROCESSED_DIR}team_win_shares_agg.csv", index=False)
+    print(f"Saved team aggregation to {PROCESSED_DIR}team_win_shares_agg.csv")
+except NameError:
+    print("team_agg variable not found in this cell scope, ensuring it is saved wherever it is defined")
+# --- Team Efficiency Plot (Seaborn) ---
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+plt.figure(figsize=(12, 8))
+sns.scatterplot(
+    data=team_agg, 
+    x='ts_percent', 
+    y='ws', 
+    hue='season', 
+    palette='viridis', 
+    size='ws', 
+    sizes=(20, 200), 
+    alpha=0.7
+)
+plt.title('Team Efficiency: True Shooting % vs Win Shares')
+plt.xlabel('True Shooting %')
+plt.ylabel('Win Shares')
+plt.grid(True, alpha=0.3)
+plt.legend(bbox_to_anchor=(1.05, 1), loc=2, borderaxespad=0.)
+plt.tight_layout()
+plt.savefig('../figures/team_win_shares.png', dpi=300)
+plt.show()
+
+--- Cell 12 ---
+from sklearn.ensemble import RandomForestRegressor
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+# 1. Prepare Data for Modeling
+# Target: Win Shares (ws) | Features: Efficiency & Style Metrics
+model_features = ['ts_percent', 'usg_percent', 'ast_percent', 
+                  'trb_percent', 'stl_percent', 'blk_percent', 
+                  'x3p_ar', 'f_tr', 'per', 'bpm']
+
+df_model = df_analysis.dropna(subset=model_features + ['ws']).copy()
+X = df_model[model_features]
+y = df_model['ws']
+
+# 2. Train Random Forest
+rf = RandomForestRegressor(n_estimators=100, random_state=42)
+rf.fit(X, y)
+
+# 3. Plot Feature Importance
+importances = pd.DataFrame({
+    'feature': model_features,
+    'importance': rf.feature_importances_
+}).sort_values('importance', ascending=False)
+
+plt.figure(figsize=(12, 6))
+sns.barplot(x='importance', y='feature', data=importances, palette='viridis')
+plt.title('Feature Importance: What Drives Win Shares?')
+plt.xlabel('Importance')
+
+# Save Plot
+try:
+    plt.savefig(f"{FIGURES_DIR}feature_importance_ws.png")
+    print(f"Saved feature importance plot to {FIGURES_DIR}")
+except Exception as e:
+    print(f"Could not save plot: {e}")
+plt.show()
+--- Cell 14 ---
+# --- HUGGINGFACE DATASET GENERATION ---
+# Create natural language descriptions for potential LLM fine-tuning or RAG
+
+def generate_description(row):
+    return (
+        f"In the {row['season']} season, {row['player']} played for {row['team']}. "
+        f"They recorded a Usage Rate of {row['usg_percent']}% and a True Shooting of {row['ts_percent']:.3f}. "
+        f"Their defensive impact included block and steal percentages of {row['blk_percent']}% and {row['stl_percent']}%, respectively. "
+        f"Overall, they contributed {row['ws']} Win Shares."
+    )
+
+hf_data = df_analysis.copy()
+hf_data['text_description'] = hf_data.apply(generate_description, axis=1)
+
+# Save as JSONL (Standard HF Format)
+hf_output_path = f"{PROCESSED_DIR}hf_player_descriptions.jsonl"
+hf_data[['player_id', 'season', 'text_description']].to_json(hf_output_path, orient='records', lines=True)
+print(f"Successfully generated {len(hf_data)} descriptions for HuggingFace.")
+print(f"Saved to: {hf_output_path}")
+--- Cell 16 ---
